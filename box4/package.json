@@ -1,0 +1,13 @@
+{
+  "name": "box4",
+  "version": "1.0.0",
+  "description": "Dropbox-like file sync (1-to-1, no auth)",
+  "scripts": {
+    "server": "node server.js",
+    "client": "node client.js"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "ws": "^8.16.0"
+  }
+}
