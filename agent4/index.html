@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Agent4 - AI Coding Agent</title>
+<link rel="stylesheet" href="node_modules/@xterm/xterm/css/xterm.css">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; overflow:hidden; font-family:system-ui,sans-serif; background:#1e1e1e; color:#d4d4d4; }
+  body { display:flex; flex-direction:column; }
+
+  #header { padding:8px 14px; background:#2d2d2d; border-bottom:1px solid #3c3c3c; display:flex; align-items:center; gap:12px; flex-shrink:0; }
+  #header h1 { margin:0; font-size:16px; font-weight:600; color:#e0e0e0; }
+  #header .workspace { font-size:12px; color:#888; }
+  #header #model-badge { font-size:11px; background:#3a3a3a; padding:2px 8px; border-radius:3px; color:#aaa; }
+
+  #chat-area { flex:1; display:flex; flex-direction:column; min-height:0; }
+  #messages { flex:1; overflow-y:auto; padding:12px 16px; display:flex; flex-direction:column; gap:10px; }
+
+  .msg { padding:10px 14px; border-radius:8px; max-width:85%; line-height:1.5; font-size:14px; white-space:pre-wrap; word-break:break-word; }
+  .msg.user { align-self:flex-end; background:#2b5278; color:#e0e0e0; }
+  .msg.agent { align-self:flex-start; background:#2d2d2d; border:1px solid #3c3c3c; color:#d4d4d4; }
+  .msg.thinking { align-self:flex-start; background:#2d2d2d; border:1px solid #555; color:#888; font-style:italic; }
+  .msg .msg-label { font-size:11px; font-weight:600; margin-bottom:4px; color:#888; text-transform:uppercase; letter-spacing:0.5px; }
+  .msg .msg-label.user-label { color:#7ab4f0; }
+  .msg .msg-label.agent-label { color:#6fcb7a; }
+
+  .cmd-block { margin:6px 0; padding:8px 12px; background:#1a1a1a; border-radius:4px; font-family:Menlo,Monaco,monospace; font-size:12px; }
+  .cmd-block .cmd-text { color:#c5a5c5; }
+  .cmd-block .cmd-output { color:#aaa; white-space:pre-wrap; margin-top:4px; border-top:1px solid #333; padding-top:4px; }
+  .cmd-block .cmd-status { color:#888; font-size:11px; }
+  .cmd-block .cmd-status.running { color:#e5c07b; }
+  .cmd-block .cmd-status.done { color:#6fcb7a; }
+
+  #input-bar { display:flex; padding:10px 16px; gap:8px; border-top:1px solid #3c3c3c; background:#252526; flex-shrink:0; }
+  #input-bar input { flex:1; padding:8px 12px; border:1px solid #3c3c3c; border-radius:4px; background:#1e1e1e; color:#d4d4d4; font-size:14px; outline:none; }
+  #input-bar input:focus { border-color:#2b5278; }
+  #input-bar button { padding:8px 20px; border:none; border-radius:4px; background:#2b5278; color:#fff; font-size:14px; cursor:pointer; }
+  #input-bar button:hover { background:#356b9c; }
+  #input-bar button:disabled { opacity:0.5; cursor:default; }
+
+  #terminal-container { height:200px; min-height:200px; flex-shrink:0; border-top:1px solid #3c3c3c; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>Agent4</h1>
+  <span class="workspace" id="workspace-display">workspace: ...</span>
+  <span id="model-badge">minimax-m2.5:cloud</span>
+</div>
+
+<div id="chat-area">
+  <div id="messages"></div>
+
+  <div id="input-bar">
+    <input id="chat-input" type="text" placeholder="告訴 AI 你想要寫什麼程式..." autofocus>
+    <button id="send-btn">送出</button>
+  </div>
+</div>
+
+<div id="terminal-container"></div>
+
+<script>
+const { ipcRenderer } = require('electron');
+const { Terminal } = require('@xterm/xterm');
+const { FitAddon } = require('@xterm/addon-fit');
+const pty = require('node-pty');
+
+// --- Workspace ---
+let WORKSPACE = '';
+
+ipcRenderer.invoke('workspace:path').then(p => {
+  WORKSPACE = p;
+  document.getElementById('workspace-display').textContent = p;
+});
+
+// --- Chat ---
+
+const messagesEl = document.getElementById('messages');
+const chatInput = document.getElementById('chat-input');
+const sendBtn = document.getElementById('send-btn');
+let isWaiting = false;
+
+function addMessage(role, content) {
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+
+  if (role === 'user') {
+    const label = document.createElement('div');
+    label.className = 'msg-label user-label';
+    label.textContent = 'You';
+    div.appendChild(label);
+  } else if (role === 'agent') {
+    const label = document.createElement('div');
+    label.className = 'msg-label agent-label';
+    label.textContent = 'Jarvis';
+    div.appendChild(label);
+  }
+
+  const text = document.createElement('div');
+  text.textContent = content;
+  div.appendChild(text);
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return div;
+}
+
+function addThinking() {
+  const div = document.createElement('div');
+  div.className = 'msg thinking';
+  div.id = 'thinking-msg';
+  div.textContent = 'Jarvis 正在思考...';
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return div;
+}
+
+function removeThinking() {
+  const el = document.getElementById('thinking-msg');
+  if (el) el.remove();
+}
+
+function addCommandBlock(cmd, output, status) {
+  const container = document.getElementById('cmd-' + cmd.replace(/[^a-zA-Z0-9]/g, '-'));
+  if (container) {
+    if (output) {
+      const outEl = container.querySelector('.cmd-output');
+      if (outEl) outEl.textContent = output;
+    }
+    const statusEl = container.querySelector('.cmd-status');
+    if (statusEl) {
+      statusEl.className = 'cmd-status ' + status;
+      statusEl.textContent = status === 'running' ? '⏳ 執行中...' : '✅ 完成';
+    }
+    return container;
+  }
+
+  const div = document.createElement('div');
+  div.className = 'cmd-block';
+  div.id = 'cmd-' + cmd.replace(/[^a-zA-Z0-9]/g, '-');
+
+  const cmdEl = document.createElement('div');
+  cmdEl.className = 'cmd-text';
+  cmdEl.textContent = `$ ${cmd}`;
+  div.appendChild(cmdEl);
+
+  if (output) {
+    const outEl = document.createElement('div');
+    outEl.className = 'cmd-output';
+    outEl.textContent = output;
+    div.appendChild(outEl);
+  }
+
+  const statusEl = document.createElement('div');
+  statusEl.className = 'cmd-status ' + status;
+  statusEl.textContent = status === 'running' ? '⏳ 執行中...' : '✅ 完成';
+  div.appendChild(statusEl);
+
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return div;
+}
+
+async function sendMessage() {
+  const text = chatInput.value.trim();
+  if (!text || isWaiting) return;
+
+  chatInput.value = '';
+  addMessage('user', text);
+
+  isWaiting = true;
+  sendBtn.disabled = true;
+  chatInput.disabled = true;
+  addThinking();
+
+  const result = await ipcRenderer.invoke('agent:run', text);
+
+  removeThinking();
+
+  if (result.success) {
+    addMessage('agent', result.response);
+  } else {
+    addMessage('agent', '錯誤：' + result.error);
+  }
+
+  isWaiting = false;
+  sendBtn.disabled = false;
+  chatInput.disabled = false;
+  chatInput.focus();
+}
+
+// --- IPC from main process ---
+
+ipcRenderer.on('agent:thinking', (_event, thinking) => {
+  if (thinking) addThinking();
+  else removeThinking();
+});
+
+ipcRenderer.on('agent:cmd', (_event, data) => {
+  if (data.status === 'running') {
+    addCommandBlock(data.cmd, '', 'running');
+  } else {
+    addCommandBlock(data.cmd, data.output || '(no output)', 'done');
+  }
+});
+
+// --- Input events ---
+
+chatInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+sendBtn.addEventListener('click', sendMessage);
+
+// --- Terminal ---
+
+const termContainer = document.getElementById('terminal-container');
+
+const term = new Terminal({
+  theme: {
+    background: '#1e1e1e', foreground: '#d4d4d4', cursor: '#d4d4d4',
+    selectionBackground: '#264f78',
+    black: '#000000', red: '#cd3131', green: '#0dbc79', yellow: '#e5e510',
+    blue: '#2472c8', magenta: '#bc3fbc', cyan: '#11b8dd', white: '#e5e5e5',
+    brightBlack: '#666666', brightRed: '#f14c4c', brightGreen: '#23d18b',
+    brightYellow: '#f5f543', brightBlue: '#3b8eea', brightMagenta: '#d670d6',
+    brightCyan: '#29b8db', brightWhite: '#e5e5e5',
+  },
+  fontSize: 13,
+  fontFamily: 'Menlo, Monaco, monospace',
+  cursorBlink: true,
+});
+
+const fitAddon = new FitAddon();
+term.loadAddon(fitAddon);
+term.open(termContainer);
+
+let ptyProcess = null;
+
+function initTerminal(cwd) {
+  try {
+    const shell = process.env.SHELL || '/bin/bash';
+    ptyProcess = pty.spawn(shell, [], {
+      name: 'xterm-256color',
+      cols: term.cols,
+      rows: term.rows,
+      cwd: cwd || process.cwd(),
+      env: process.env,
+    });
+
+    ptyProcess.onData(data => term.write(data));
+    term.onData(data => ptyProcess.write(data));
+    term.onResize(size => ptyProcess.resize(size.cols, size.rows));
+
+    window.addEventListener('beforeunload', () => {
+      if (ptyProcess) ptyProcess.kill();
+    });
+  } catch (e) {
+    term.write(`\r\n\x1b[31m[Error] Failed to start terminal: ${e.message}\x1b[0m\r\n`);
+  }
+}
+
+window.addEventListener('resize', () => fitAddon.fit());
+
+ipcRenderer.invoke('workspace:path').then(p => {
+  if (p) {
+    WORKSPACE = p;
+    document.getElementById('workspace-display').textContent = p;
+  }
+  initTerminal(WORKSPACE || process.cwd());
+});
+</script>
+</body>
+</html>
