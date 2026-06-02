@@ -3,20 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <title>Editor4</title>
+<link rel="stylesheet" href="node_modules/@xterm/xterm/css/xterm.css">
 <style>
-  html, body { margin:0; height:100%; overflow:hidden; font-family:sans-serif; }
+  html, body { margin:0; height:100%; overflow:hidden; font-family:sans-serif; background:#1e1e1e; color:#d4d4d4; }
   body { display:flex; }
-  #sidebar { width:200px; border-right:1px solid #ccc; height:100%; background:#f5f5f5; display:flex; flex-direction:column; }
-  #content { flex:1; display:flex; flex-direction:column; }
-  #editor { flex:1; padding:10px; overflow:auto; background:#fff; border:none; resize:none; font-family:monospace; white-space:pre; }
-  .sidebar-item { padding:5px; cursor:pointer; }
-  .sidebar-item:hover { background:#e0e0e0; }
+  #sidebar { width:200px; border-right:1px solid #3c3c3c; height:100%; background:#252526; display:flex; flex-direction:column; overflow-y:auto; }
+  #sidebar .sidebar-item { padding:5px 10px; cursor:pointer; color:#ccc; }
+  #sidebar .sidebar-item:hover { background:#2a2d2e; }
+  #content { flex:1; display:flex; flex-direction:column; min-height:0; }
+  #editor { flex:1; padding:10px; overflow:auto; background:#1e1e1e; color:#d4d4d4; border:none; resize:none; font-family:Menlo, Monaco, monospace; white-space:pre; outline:none; }
+  #terminal-container { height:200px; min-height:200px; background:#1e1e1e; border-top:1px solid #3c3c3c; }
 </style>
 </head>
 <body>
 
 <div id="sidebar"></div>
-<div id="content"><textarea id="editor"></textarea></div>
+<div id="content">
+  <textarea id="editor"></textarea>
+  <div id="terminal-container"></div>
+</div>
 
 <script>
 const { ipcRenderer } = require('electron');
@@ -118,6 +123,49 @@ window.closeEditor = () => {
 };
 
 loadDirectory('.');
+
+// --- Terminal ---
+const { Terminal } = require('@xterm/xterm');
+const { FitAddon } = require('@xterm/addon-fit');
+const pty = require('node-pty');
+
+const termContainer = document.getElementById('terminal-container');
+
+const term = new Terminal({
+  theme: {
+    background: '#1e1e1e', foreground: '#d4d4d4', cursor: '#d4d4d4',
+    selectionBackground: '#264f78',
+    black: '#000000', red: '#cd3131', green: '#0dbc79', yellow: '#e5e510',
+    blue: '#2472c8', magenta: '#bc3fbc', cyan: '#11b8dd', white: '#e5e5e5',
+    brightBlack: '#666666', brightRed: '#f14c4c', brightGreen: '#23d18b',
+    brightYellow: '#f5f543', brightBlue: '#3b8eea', brightMagenta: '#d670d6',
+    brightCyan: '#29b8db', brightWhite: '#e5e5e5',
+  },
+  fontSize: 13,
+  fontFamily: 'Menlo, Monaco, monospace',
+  cursorBlink: true,
+  allowTransparency: false,
+});
+
+const fitAddon = new FitAddon();
+term.loadAddon(fitAddon);
+term.open(termContainer);
+
+const shell = process.env.SHELL || '/bin/bash';
+const ptyProcess = pty.spawn(shell, [], {
+  name: 'xterm-256color',
+  cols: term.cols,
+  rows: term.rows,
+  cwd: process.cwd(),
+  env: process.env,
+});
+
+ptyProcess.onData(data => term.write(data));
+term.onData(data => ptyProcess.write(data));
+term.onResize(size => ptyProcess.resize(size.cols, size.rows));
+
+window.addEventListener('resize', () => fitAddon.fit());
+window.addEventListener('beforeunload', () => ptyProcess.kill());
 </script>
 </body>
 </html>
