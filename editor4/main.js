@@ -45,6 +45,7 @@ app.whenReady().then(() => {
       submenu: [
         { label: 'Open...', accelerator: 'Cmd+O', click: () => win.webContents.executeJavaScript('openFolder()') },
         { label: 'Save', accelerator: 'Cmd+S', click: () => win.webContents.executeJavaScript('saveFile()') },
+        { label: 'Save As...', accelerator: 'Cmd+Shift+S', click: () => win.webContents.executeJavaScript('saveFileAs()') },
         { label: 'Close', accelerator: 'Cmd+W', click: () => win.webContents.executeJavaScript('closeEditor()') }
       ]
     },

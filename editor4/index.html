@@ -22,6 +22,7 @@
 const { ipcRenderer } = require('electron');
 
 let currentPath = null;
+let currentFile = null;
 
 function updateSidebar(items) {
   const sidebar = document.getElementById('sidebar');
@@ -62,6 +63,7 @@ async function loadItem(name) {
     } else {
       const content = await ipcRenderer.invoke('fs:readFile', fullPath);
       document.getElementById('editor').value = content;
+      currentFile = fullPath;
     }
   } catch (e) { console.error(e); }
 }
@@ -91,15 +93,28 @@ async function readFolderRecursive(dir, depth) {
 }
 
 window.saveFile = async () => {
+  if (currentFile) {
+    await ipcRenderer.invoke('fs:writeFile', currentFile, document.getElementById('editor').value);
+  } else {
+    const result = await ipcRenderer.invoke('dialog:saveFile');
+    if (!result.canceled) {
+      currentFile = result.filePaths[0];
+      await ipcRenderer.invoke('fs:writeFile', currentFile, document.getElementById('editor').value);
+    }
+  }
+};
+
+window.saveFileAs = async () => {
   const result = await ipcRenderer.invoke('dialog:saveFile');
   if (!result.canceled) {
-    const filePath = result.filePaths[0];
-    await ipcRenderer.invoke('fs:writeFile', filePath, document.getElementById('editor').value);
+    currentFile = result.filePaths[0];
+    await ipcRenderer.invoke('fs:writeFile', currentFile, document.getElementById('editor').value);
   }
 };
 
 window.closeEditor = () => {
   document.getElementById('editor').value = '';
+  currentFile = null;
 };
 
 loadDirectory('.');
