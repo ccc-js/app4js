@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Editor4</title>
+<style>
+  html, body { margin:0; height:100%; overflow:hidden; font-family:sans-serif; }
+  body { display:flex; }
+  #sidebar { width:200px; border-right:1px solid #ccc; height:100%; background:#f5f5f5; display:flex; flex-direction:column; }
+  #content { flex:1; display:flex; flex-direction:column; }
+  #editor { flex:1; padding:10px; overflow:auto; background:#fff; border:none; resize:none; font-family:monospace; white-space:pre; }
+  .sidebar-item { padding:5px; cursor:pointer; }
+  .sidebar-item:hover { background:#e0e0e0; }
+</style>
+</head>
+<body>
+
+<div id="sidebar"></div>
+<div id="content"><textarea id="editor"></textarea></div>
+
+<script>
+const { ipcRenderer } = require('electron');
+
+let currentPath = null;
+
+function updateSidebar(items) {
+  const sidebar = document.getElementById('sidebar');
+  sidebar.innerHTML = '';
+  items.forEach(name => {
+    const el = document.createElement('div');
+    el.className = 'sidebar-item';
+    el.textContent = name;
+    el.dataset.name = name;
+    el.onclick = () => {
+      if (name === '..') {
+        const parent = currentPath ? currentPath.split('/').slice(0, -1).join('/') || '' : '';
+        loadDirectory(parent);
+      } else {
+        loadItem(name);
+      }
+    };
+    sidebar.appendChild(el);
+  });
+}
+
+async function loadDirectory(dir) {
+  try {
+    const entries = await ipcRenderer.invoke('fs:readdir', dir);
+    const dirs = entries.filter(e => e.isDirectory).map(e => e.name);
+    const files = entries.filter(e => e.isFile).map(e => e.name);
+    currentPath = dir;
+    updateSidebar([...dirs, ...files, '..']);
+  } catch (e) { console.error(e); }
+}
+
+async function loadItem(name) {
+  const fullPath = currentPath ? `${currentPath}/${name}` : name;
+  try {
+    const result = await ipcRenderer.invoke('fs:stat', fullPath);
+    if (result.isDirectory) {
+      loadDirectory(fullPath);
+    } else {
+      const content = await ipcRenderer.invoke('fs:readFile', fullPath);
+      document.getElementById('editor').value = content;
+    }
+  } catch (e) { console.error(e); }
+}
+
+window.openFolder = async () => {
+  const result = await ipcRenderer.invoke('dialog:openDirectory');
+  if (!result.canceled) {
+    const folder = result.filePaths[0];
+    const list = await readFolderRecursive(folder, 0);
+    document.getElementById('editor').value = list;
+  }
+};
+
+async function readFolderRecursive(dir, depth) {
+  const entries = await ipcRenderer.invoke('fs:readdir', dir);
+  const indent = '  '.repeat(depth);
+  let output = '';
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (entry.isDirectory) {
+      output += indent + '\uD83D\uDCC1 ' + entry.name + '\n';
+      output += await readFolderRecursive(`${dir}/${entry.name}`, depth + 1);
+    } else {
+      output += indent + '\uD83D\uDCC4 ' + entry.name + '\n';
+    }
+  }
+  return output;
+}
+
+window.saveFile = async () => {
+  const result = await ipcRenderer.invoke('dialog:saveFile');
+  if (!result.canceled) {
+    const filePath = result.filePaths[0];
+    await ipcRenderer.invoke('fs:writeFile', filePath, document.getElementById('editor').value);
+  }
+};
+
+window.closeEditor = () => {
+  document.getElementById('editor').value = '';
+};
+
+loadDirectory('.');
+</script>
+</body>
+</html>
